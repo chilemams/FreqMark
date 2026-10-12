@@ -56,3 +56,7 @@ Requirements: macOS 14+, Xcode with iOS 17+/macOS SDK, `xcodegen` via Homebrew, 
 ## Status
 
 v1, single-window macOS app (SwiftUI, no third-party dependencies). Built and maintained as a personal tool; PRs and issues welcome — see the repo at github.com/chilemams/FreqMark.
+
+## License
+
+MIT — see [LICENSE](LICENSE). FreqMark is free to use, modify and redistribute; attribution appreciated but not required. Audio hardware names mentioned in docs (SSL 12, Jabra) belong to their respective owners.
