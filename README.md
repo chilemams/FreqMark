@@ -4,6 +4,18 @@ FreqMark is a macOS app designed for comparing multiple audio signals — for ex
 
 ![FreqMark in action: two frozen captures, a live trace, and the crosshair readout](assets/screenshot.png)
 
+## Download (installer)
+
+Grab the ready-made DMG — drag **FreqMark.app** onto the **Applications** alias inside the image:
+
+**[Download FreqMark-1.0.dmg (1.1 MB)](dist/FreqMark-1.0.dmg)**
+
+First-launch notes (app is unsigned):
+
+1. If macOS blocks it: right-click `FreqMark.app` → **Open** → confirm (one time only), or allow it in System Settings → Privacy & Security.
+2. Grant **Microphone** permission when prompted — that's what the analyzer listens to.
+3. Build requirements below, if you'd rather compile it yourself.
+
 ## Features
 
 - **Live frequency response** — real-time spectrum of any chosen audio input on a logarithmic frequency axis (20 Hz → Nyquist), with a proper dB scale on the y-axis
