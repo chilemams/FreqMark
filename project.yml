@@ -20,3 +20,29 @@ targets:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "FreqMark needs microphone access to display the live frequency response."
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  FreqMarkTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: FreqMarkTests
+    dependencies:
+      - target: FreqMark
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  FreqMark:
+    build:
+      targets:
+        FreqMark: all
+    test:
+      targets:
+        - FreqMarkTests
+  FreqMarkTests:
+    build:
+      targets:
+        FreqMark: all
+        FreqMarkTests: all
+    test:
+      targets:
+        - FreqMarkTests

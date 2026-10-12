@@ -70,11 +70,8 @@ struct ContentView: View {
             titleVisibility: .visible
         ) {
             Button("Clear all markers, captures and diffs", role: .destructive) {
-                store.markers.removeAll()
-                store.captures.removeAll()
-                store.diffLayers.removeAll()
+                store.clearAll()
                 pendingDiffBase = nil
-                store.save()
             }
             Button("Cancel", role: .cancel) {}
         } message: {

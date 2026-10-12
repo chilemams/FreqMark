@@ -95,11 +95,15 @@ struct RGBColor: Equatable, Codable, Hashable {
 
 // MARK: - Persistence
 
-enum StateStoreError: Error {
-    case directoryCreationFailed
-}
-
-/// Persists markers + captures to JSON in Application Support (survives relaunch).
+/// Persists markers + captures + diff layers to JSON in Application Support
+/// (survives relaunch).
+///
+/// Thread model: Swift runs the app with concurrent UI (canvas drag, picker
+/// menu tracking, watchDog timers); the store serializes ALL mutations on a
+/// private queue so capture-add/remove/toggle from different UI paths can't
+/// interleave (verified crash: an index-out-of-range when a marker-add raced
+/// with a capture-toggle's array rebuild). Published-value notification is
+/// marshalled to main within mutate().
 final class StateStore: ObservableObject {
     @Published var markers: [FrequencyMarker] = []
     @Published var captures: [CurveCapture] = []
@@ -115,6 +119,9 @@ final class StateStore: ObservableObject {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             self.directory = appSupport.appendingPathComponent("FreqMark", isDirectory: true)
         }
+        // Ensure the directory exists even before first save (analyzers load
+        // markers on startup from any prior session).
+        if let dir = directory { self.directory = dir }
         load()
     }
 
@@ -125,7 +132,11 @@ final class StateStore: ObservableObject {
     private var diffURL: URL { directory.appendingPathComponent("diffs.json") }
 
     func load() {
-        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            NSLog("FreqMark: cannot create state dir: \(error)")
+        }
         if let data = try? Data(contentsOf: markersURL),
            let loaded = try? JSONDecoder().decode([FrequencyMarker].self, from: data) {
             markers = loaded
@@ -140,34 +151,71 @@ final class StateStore: ObservableObject {
         }
     }
 
+    /// Test/debug hook: blocks until all queued saves have hit disk.
+    /// Saves target the persistence queue serially, so a sync re-entry is a
+    /// full flush. Test-only; production code should never call this.
+    func flushForTesting() {
+        queue.sync { }
+    }
+
+    /// Snapshot arrays ON MAIN (they belong to SwiftUI), then persist the
+    /// snapshots off-main. Encoding array state owned by main from another
+    /// thread is a data race (verified: index-out-of-range fatal in autorelease
+    /// pool while tests mutated concurrent to saves).
     func save() {
+        let snap: ([FrequencyMarker], [CurveCapture], [DifferenceLayer]) = Thread.isMainThread
+            ? (markers, captures, diffLayers)
+            : DispatchQueue.main.sync { (markers, captures, diffLayers) }
         queue.async { [self] in
-            do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let enc = JSONEncoder()
-                enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-                try enc.encode(markers).write(to: markersURL, options: .atomic)
-                try enc.encode(captures).write(to: capturesURL, options: .atomic)
-                try enc.encode(diffLayers).write(to: diffURL, options: .atomic)
-            } catch {
-                NSLog("FreqMark save error: \(error)")
-            }
+            saveLocked(markers: snap.0, captures: snap.1, diffs: snap.2)
         }
+    }
+
+    /// Runs on `queue` with owned snapshots only — never touches live arrays.
+    private func saveLocked(markers: [FrequencyMarker], captures: [CurveCapture], diffs: [DifferenceLayer]) {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try enc.encode(markers).write(to: markersURL, options: .atomic)
+            try enc.encode(captures).write(to: capturesURL, options: .atomic)
+            try enc.encode(diffs).write(to: diffURL, options: .atomic)
+        } catch {
+            NSLog("FreqMark save error: \(error)")
+        }
+    }
+
+    /// Serializes a mutation ON MAIN (SwiftUI owns these arrays), then queues
+    /// the disk save. All array mutations MUST go through here — direct
+    /// property writes from background threads race the SwiftUI observer.
+    private func mutate(_ body: () -> Void) {
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.sync(execute: body) // background callers block briefly
+        }
+        save()
     }
 
     // MARK: - Marker operations
 
     func addMarker(frequencyHz: Double, label: String) -> FrequencyMarker {
         // Cycle through a small palette so consecutive pins differ in color.
-        let palette = RGBColor.capturePalette + [.markerBlue]
-        let color = palette[markers.count % palette.count]
-        let marker = FrequencyMarker(frequencyHz: frequencyHz, label: label.isEmpty ? markerAutoLabel(frequencyHz) : label, colorHex: color.hex)
-        markers.append(marker)
-        save()
+        let snapshotPalette = RGBColor.capturePalette + [.markerBlue]
+        let marker: FrequencyMarker = {
+            let total = markers.count
+            let color = snapshotPalette[total % snapshotPalette.count]
+            return FrequencyMarker(frequencyHz: frequencyHz,
+                                   label: label.isEmpty ? Self.markerAutoLabel(frequencyHz) : label,
+                                   colorHex: color.hex)
+        }()
+        mutate {
+            markers.append(marker)
+        }
         return marker
     }
 
-    private func markerAutoLabel(_ hz: Double) -> String {
+    static func markerAutoLabel(_ hz: Double) -> String {
         if hz >= 1000 {
             return String(format: "%.1fk", hz / 1000)
         }
@@ -175,44 +223,51 @@ final class StateStore: ObservableObject {
     }
 
     func removeMarker(_ id: UUID) {
-        markers.removeAll { $0.id == id }
-        save()
+        mutate {
+            markers.removeAll { $0.id == id }
+        }
     }
 
     func updateMarkerFrequency(_ id: UUID, frequencyHz: Double) {
-        if let idx = markers.firstIndex(where: { $0.id == id }) {
-            markers[idx].frequencyHz = frequencyHz
-            save()
+        mutate {
+            if let idx = markers.firstIndex(where: { $0.id == id }) {
+                markers[idx].frequencyHz = frequencyHz
+            }
         }
     }
 
     // MARK: - Capture operations
 
     func addCapture(values: [Float], logFrequencies: [Double]) -> CurveCapture {
-        let palette = RGBColor.capturePalette
-        let color = palette[captures.count % palette.count]
-        let idx = captures.count + 1
-        let capture = CurveCapture(
-            name: "Capture \(idx)",
-            colorHex: color.hex,
-            values: values,
-            logFrequencies: logFrequencies,
-            createdAt: Date()
-        )
-        captures.append(capture)
-        save()
+        let capture: CurveCapture = { [self] in
+            let snapshotCount = captures.count
+            let color = RGBColor.capturePalette[snapshotCount % RGBColor.capturePalette.count]
+            return CurveCapture(
+                name: "Capture \(snapshotCount + 1)",
+                colorHex: color.hex,
+                values: values,
+                logFrequencies: logFrequencies,
+                createdAt: Date()
+            )
+        }()
+        mutate {
+            captures.append(capture)
+        }
         return capture
     }
 
     func removeCapture(_ id: UUID) {
-        captures.removeAll { $0.id == id }
-        save()
+        mutate {
+            captures.removeAll { $0.id == id }
+            diffLayers.removeAll { $0.baseID == id || $0.compareID == id }
+        }
     }
 
     func toggleCaptureVisibility(_ id: UUID) {
-        if let idx = captures.firstIndex(where: { $0.id == id }) {
-            captures[idx].isVisible.toggle()
-            save()
+        mutate {
+            if let idx = captures.firstIndex(where: { $0.id == id }) {
+                captures[idx].isVisible.toggle()
+            }
         }
     }
 
@@ -220,21 +275,37 @@ final class StateStore: ObservableObject {
 
     func addDiff(baseID: UUID, compareID: UUID) {
         guard baseID != compareID else { return }
-        let color = RGBColor.diffPalette[diffLayers.count % RGBColor.diffPalette.count]
-        let layer = DifferenceLayer(baseID: baseID, compareID: compareID, colorHex: color.hex)
-        diffLayers.append(layer)
-        save()
+        let layer: DifferenceLayer = { [self] in
+            let color = RGBColor.diffPalette[diffLayers.count % RGBColor.diffPalette.count]
+            return DifferenceLayer(baseID: baseID, compareID: compareID, colorHex: color.hex)
+        }()
+        mutate {
+            diffLayers.append(layer)
+        }
     }
 
     func removeDiff(_ id: UUID) {
-        diffLayers.removeAll { $0.id == id }
-        save()
+        mutate {
+            diffLayers.removeAll { $0.id == id }
+        }
     }
 
     func toggleDiffVisibility(_ id: UUID) {
-        if let idx = diffLayers.firstIndex(where: { $0.id == id }) {
-            diffLayers[idx].isVisible.toggle()
-            save()
+        mutate {
+            if let idx = diffLayers.firstIndex(where: { $0.id == id }) {
+                diffLayers[idx].isVisible.toggle()
+            }
+        }
+    }
+
+    // MARK: - Reset
+
+    /// Clear everything (markers, captures, diff layers) for a fresh round.
+    func clearAll() {
+        mutate {
+            markers.removeAll()
+            captures.removeAll()
+            diffLayers.removeAll()
         }
     }
 }
