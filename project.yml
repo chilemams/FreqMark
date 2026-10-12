@@ -1,0 +1,22 @@
+name: FreqMark
+options:
+  bundleIdPrefix: com.mills
+  deploymentTarget:
+    macOS: "14.0"
+targets:
+  FreqMark:
+    type: application
+    platform: macOS
+    sources:
+      - path: FreqMark
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mills.FreqMark
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.9"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "FreqMark needs microphone access to display the live frequency response."
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
