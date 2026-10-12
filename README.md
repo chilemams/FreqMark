@@ -2,7 +2,7 @@
 
 FreqMark is a macOS app designed for comparing multiple audio signals — for example, comparing the frequency response of a clean guitar or bass to an affected guitar sound. It's built for hearing with your eyes: drop a pedal in front of your signal and see exactly what it does to your tone, frequency by frequency. Especially helpful for preparing your effects for real-world live applications — knowing what a fuzz, compressor, or envelope filter costs you in low end before you're on stage.
 
-![screenshot placeholder](#) <!-- TODO: replace with a real screenshot of a Diff session -->
+![FreqMark in action: two frozen captures, a live trace, and the crosshair readout](assets/screenshot.png)
 
 ## Features
 
